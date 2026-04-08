@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# Data (VERY IMPORTANT)
+data/
+
+# Models
+models/
+
+# Environment
+venv/
+.env
+
+# System files
+.DS_Store
+Thumbs.db
