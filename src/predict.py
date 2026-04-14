@@ -3,45 +3,66 @@ import tensorflow as tf
 import cv2
 import matplotlib.pyplot as plt
 
-from tensorflow.keras.models import load_model
 from preprocess import load_labels, get_char_map, preprocess_image
 
 
-# Paths
+# =========================
+# PATHS
+# =========================
 label_path = "../data/words_new.txt"
 image_base_path = "../data/iam_words/words/"
 model_path = "../models/htr_model.h5"
 
 
-# Load label + char map
+# =========================
+# LOAD DATA
+# =========================
 labels = load_labels(label_path)
 char_to_num, num_to_char = get_char_map()
 
 
-# ✅ LOAD TRAINED MODEL (IMPORTANT FIX)
-model = load_model(model_path, compile=False)
+# =========================
+# LOAD TRAINED MODEL
+# =========================
+print("Loading model...")
+model = tf.keras.models.load_model(model_path, compile=False)
+print("Model loaded successfully!")
 
 
-# ✅ PROPER CTC DECODING
+# =========================
+# CTC DECODER (CORRECT WAY)
+# =========================
 def decode_prediction(pred):
     input_len = np.ones(pred.shape[0]) * pred.shape[1]
 
-    results = tf.keras.backend.ctc_decode(
+    decoded = tf.keras.backend.ctc_decode(
         pred,
         input_length=input_len,
         greedy=True
     )[0][0]
 
-    output_text = ""
+    decoded = decoded.numpy()
 
-    for res in results.numpy()[0]:
-        if res != -1:
-            output_text += num_to_char.get(res, "")
+    text = ""
+    for char in decoded[0]:
+        if char != -1:
+            text += num_to_char.get(char, '')
 
-    return output_text
+    return text
 
 
-# Pick one sample
+# =========================
+# OPTIONAL TEXT CLEANING
+# =========================
+def clean_text(text):
+    import re
+    text = re.sub(r'[^a-zA-Z0-9 ]', '', text)
+    return text
+
+
+# =========================
+# TEST ON ONE SAMPLE
+# =========================
 for word_id in labels:
 
     parts = word_id.split('-')
@@ -55,20 +76,31 @@ for word_id in labels:
     if image is None:
         continue
 
+    # ✅ Preprocess (NO augmentation during inference)
     processed = preprocess_image(image)
+
     processed = np.expand_dims(processed, axis=-1)
     processed = np.expand_dims(processed, axis=0)
 
-    # Predict
+    # =========================
+    # PREDICT
+    # =========================
     preds = model.predict(processed)
 
     decoded_text = decode_prediction(preds)
 
-    print("Actual:", labels[word_id])
+    # Optional cleaning
+    cleaned_text = clean_text(decoded_text)
+
+    # =========================
+    # OUTPUT
+    # =========================
+    print("Actual   :", labels[word_id])
     print("Predicted:", decoded_text)
+    print("Cleaned  :", cleaned_text)
 
     plt.imshow(processed[0].squeeze(), cmap='gray')
-    plt.title(f"Pred: {decoded_text}")
+    plt.title(f"Pred: {cleaned_text}")
     plt.axis("off")
     plt.show()
 

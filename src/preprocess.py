@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import string
 import os
+import random
 
 def load_labels(label_path):
     labels = {}
@@ -24,25 +25,17 @@ def load_labels(label_path):
     return labels
 
 
-def preprocess_image(image, img_height=32, img_width=128):
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+def preprocess_image(image, img_height=32, img_width=128, augment=False):
 
-    h, w = image.shape
-    new_w = int(w * (img_height / h))
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    image = cv2.resize(image, (new_w, img_height))
+    # 🔥 LIGHT normalization (DON'T over-process)
+    gray = cv2.resize(gray, (img_width, img_height))
 
-    padded = np.ones((img_height, img_width)) * 255
+    # Normalize SAME as training
+    gray = gray.astype("float32") / 255.0
 
-    if new_w > img_width:
-        image = cv2.resize(image, (img_width, img_height))
-        padded = image
-    else:
-        padded[:, :new_w] = image
-
-    padded = padded.astype('float32') / 255.0
-
-    return padded
+    return gray
 
 
 def get_char_map():
@@ -105,3 +98,21 @@ def build_dataset(labels, image_base_path, char_to_num, max_samples=1000):
                 break
 
     return np.array(X), Y
+
+
+def augment_image(image):
+    # Random rotation
+    angle = random.uniform(-5, 5)
+    h, w = image.shape
+    M = cv2.getRotationMatrix2D((w//2, h//2), angle, 1)
+    image = cv2.warpAffine(image, M, (w, h), borderValue=255)
+
+    # Random noise
+    noise = np.random.randint(0, 30, image.shape, dtype='uint8')
+    image = cv2.add(image, noise)
+
+    # Random blur
+    if random.random() < 0.3:
+        image = cv2.GaussianBlur(image, (3,3), 0)
+
+    return image
