@@ -1,9 +1,12 @@
 import cv2
 import numpy as np
-import string
 import os
 import random
 
+
+# =========================
+# LOAD IAM WORD LABELS (OLD)
+# =========================
 def load_labels(label_path):
     labels = {}
 
@@ -25,94 +28,165 @@ def load_labels(label_path):
     return labels
 
 
-def preprocess_image(image, img_height=32, img_width=128, augment=False):
+# =========================
+# LOAD IAM LINE LABELS (NEW)
+# =========================
+def load_line_labels(label_path):
+    labels = {}
 
+    with open(label_path, "r", encoding="utf-8") as f:
+        for line in f:
+            img, text = line.strip().split("\t")
+            labels[img] = text
+
+    return labels
+
+
+# =========================
+# PREPROCESS IMAGE (FINAL)
+# =========================
+def preprocess_image(image, img_height=32, img_width=512, augment=False):
+
+    # Convert to grayscale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # 🔥 LIGHT normalization (DON'T over-process)
-    gray = cv2.resize(gray, (img_width, img_height))
+    # 🔥 Augmentation ONLY during training
+    if augment:
+        gray = augment_image(gray)
 
-    # Normalize SAME as training
-    gray = gray.astype("float32") / 255.0
+    # 🔥 OTSU threshold (clean text)
+    _, thresh = cv2.threshold(
+        gray,
+        0,
+        255,
+        cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+    )
 
-    return gray
+    # =========================
+    # RESIZE WITH ASPECT RATIO
+    # =========================
+    h, w = thresh.shape
+
+    if h == 0 or w == 0:
+        return np.zeros((img_height, img_width), dtype=np.float32)
+
+    scale = img_height / h
+    new_w = int(w * scale)
+
+    # Clamp width (VERY IMPORTANT)
+    new_w = max(1, min(new_w, img_width))
+
+    resized = cv2.resize(thresh, (new_w, img_height))
+
+    # =========================
+    # CENTER PADDING (BETTER)
+    # =========================
+    padded = np.zeros((img_height, img_width), dtype=np.uint8)
+
+    start_x = (img_width - new_w) // 2
+    padded[:, start_x:start_x + new_w] = resized
+
+    # =========================
+    # NORMALIZE
+    # =========================
+    padded = padded.astype("float32") / 255.0
+
+    return padded
 
 
+# =========================
+# CHAR MAP (CTC SAFE)
+# =========================
 def get_char_map():
     import string
 
-    chars = string.ascii_letters + string.digits
+    chars = string.ascii_letters + string.digits + " .,?-\'"
 
-    # Start from 0 (NOT 1)
     char_to_num = {char: idx for idx, char in enumerate(chars)}
     num_to_char = {idx: char for idx, char in enumerate(chars)}
 
     return char_to_num, num_to_char
 
 
+# =========================
+# CLEAN TEXT (IMPORTANT)
+# =========================
+def clean_text(text):
+    import re
+
+    # Keep letters, numbers, spaces
+    text = re.sub(r'[^a-zA-Z0-9 ]', '', text)
+
+    # Remove multiple spaces
+    text = re.sub(r'\s+', ' ', text)
+
+    return text.strip()
+
+
+# =========================
+# ENCODE TEXT
+# =========================
 def encode_text(text, char_to_num):
     return [char_to_num[c] for c in text if c in char_to_num]
 
 
-# 🔥 NEW: DATASET BUILDER
-
-def build_dataset(labels, image_base_path, char_to_num, max_samples=1000):
+# =========================
+# DATASET BUILDER (LINES)
+# =========================
+def build_line_dataset(labels, image_base_path, char_to_num, max_samples=50000):
     X = []
     Y = []
 
-    count = 0
+    for i, img_name in enumerate(labels):
 
-    for word_id in labels:
+        image_path = os.path.join(image_base_path, img_name)
 
-        parts = word_id.split('-')
-        folder1 = parts[0]
-        folder2 = parts[0] + "-" + parts[1]
+        if not os.path.exists(image_path):
+            continue
 
-        image_path = os.path.join(
-            image_base_path,
-            folder1,
-            folder2,
-            word_id + ".png"
-        )
+        image = cv2.imread(image_path)
 
-        if os.path.exists(image_path):
-            image = cv2.imread(image_path)
+        if image is None:
+            continue
 
-            if image is None:
-                continue
+        # 🔥 SAME preprocessing as inference
+        processed = preprocess_image(image, augment=True)
 
-            processed = preprocess_image(image)
+        # 🔥 CLEAN TEXT (CRITICAL FIX)
+        text = clean_text(labels[img_name])
 
-            text = labels[word_id]
-            encoded = encode_text(text, char_to_num)
+        encoded = encode_text(text, char_to_num)
 
-            if len(encoded) == 0:
-                continue
+        if len(encoded) == 0:
+            continue
 
-            X.append(processed)
-            Y.append(encoded)
+        X.append(processed)
+        Y.append(encoded)
 
-            count += 1
-
-            if count >= max_samples:
-                break
+        if i >= max_samples:
+            break
 
     return np.array(X), Y
 
 
+# =========================
+# AUGMENTATION (SAFE)
+# =========================
 def augment_image(image):
-    # Random rotation
-    angle = random.uniform(-5, 5)
+
     h, w = image.shape
+
+    # Rotation
+    angle = random.uniform(-5, 5)
     M = cv2.getRotationMatrix2D((w//2, h//2), angle, 1)
     image = cv2.warpAffine(image, M, (w, h), borderValue=255)
 
-    # Random noise
-    noise = np.random.randint(0, 30, image.shape, dtype='uint8')
+    # Noise
+    noise = np.random.randint(0, 20, image.shape, dtype='uint8')
     image = cv2.add(image, noise)
 
-    # Random blur
-    if random.random() < 0.3:
+    # Blur
+    if random.random() < 0.2:
         image = cv2.GaussianBlur(image, (3,3), 0)
 
     return image
